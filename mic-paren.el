@@ -1,10 +1,10 @@
 ;;; mic-paren.el --- advanced highlighting of matching parentheses
 
-;;; Copyright (C) 2008, 2012 Thien-Thi Nguyen
+;;; Copyright (C) 2008, 2012, 2013, 2014 Thien-Thi Nguyen
 ;;; Copyright (C) 1997 Mikael Sjödin (mic@docs.uu.se)
 
-;; Version: 3.10
-;; Released: 2012-07-16
+;; Version: 3.13
+;; Released: 2014-09-27
 ;; Author: Mikael Sjödin (mic@docs.uu.se)
 ;;         Klaus Berndl  <berndl@sdm.de>
 ;;         Jonathan Kotta <jpkotta@gmail.com>
@@ -50,14 +50,19 @@
 ;;
 ;; Some examples to try in your ~/.emacs:
 ;;
-;; (add-hook 'LaTeX-mode-hook
-;;           (function (lambda ()
-;;                       (paren-toggle-matching-quoted-paren 1)
-;;                       (paren-toggle-matching-paired-delimiter 1))))
+;;  (add-hook 'LaTeX-mode-hook
+;;            (function (lambda ()
+;;                        (paren-toggle-matching-quoted-paren 1)
+;;                        (paren-toggle-matching-paired-delimiter 1))))
 ;;
-;; (add-hook 'c-mode-common-hook
-;;           (function (lambda ()
-;;                        (paren-toggle-open-paren-context 1))))
+;;  (add-hook 'c-mode-common-hook
+;;            (function (lambda ()
+;;                         (paren-toggle-open-paren-context 1))))
+;;
+;; If you use CUA mode, these might be useful, too:
+;;
+;;  (put 'paren-forward-sexp 'CUA 'move)
+;;  (put 'paren-backward-sexp 'CUA 'move)
 ;;
 ;; ----------------------------------------------------------------------
 ;; Installation:
@@ -87,6 +92,9 @@
 ;;   cursor is between two expressions).
 ;; o Indication of mismatched parentheses.
 ;; o Recognition of "escaped" (also often called "quoted") parentheses.
+;; o Recognition of SML-style "sexp-ish" comment syntax.
+;;   NB: This support is preliminary; there are still problems
+;;       when the parens in the comment span multiple lines, etc.
 ;; o Option to match "escaped" parens too, especially in (La)TeX-mode
 ;;   (e.g., matches expressions like "\(foo bar\)" properly).
 ;; o Offers two functions as replacement for `forward-sexp' and
@@ -169,6 +177,14 @@
 ;;
 ;; ----------------------------------------------------------------------
 ;; Versions:
+;; v3.13   + Fix bug introduced in v3.12: Use ‘cl-flet*’.
+;;
+;; v3.12   + Avoid naked ‘flet’; use ‘cl-flet’ instead.
+;;           Thanks to Le Wang.
+;;
+;; v3.11   + Added support for recognizing SML-style comments as a sexp.
+;;           Thanks to Leo Liu, Stefan Monnier.
+;;
 ;; v3.10   + Added message-length clamping (var `paren-max-message-length').
 ;;           Thanks to Jonathan Kotta.
 ;;
@@ -199,11 +215,11 @@
 ;;           the computation of the offscreen-message-linenumber.  Either the
 ;;           number of lines between the two matching parens or the absolute
 ;;           linenumber.  (Thank you for the idea and a first implementation
-;;           to Eliyahu Barzilay <eli@cs.bgu.ac.il>.)
+;;           to Eli Barzilay <eli@barzilay.org>.)
 ;;         + New option `paren-message-truncate-lines': If mic-paren messages
 ;;           should be truncated or not (has only an effect in GNU Emacs 21).
-;;           (Thank you for the idea and a first implementation to Eliyahu
-;;           Barzilay <eli@cs.bgu.ac.il>.)
+;;           (Thank you for the idea and a first implementation to Eli
+;;           Barzilay <eli@barzilay.org>.)
 ;;
 ;; v3.4    + Corrected some bugs in the backward-compatibility for older
 ;;           Emacsen.  Thanks to Tetsuo Tsukamoto <czkmt@remus.dti.ne.jp>.
@@ -295,7 +311,7 @@
 ;;
 ;; v1.9    Avoids multiple messages/dings when point has not moved.  Thus,
 ;;         mic-paren no longer overwrites messages in minibuffer.  Inspired by
-;;         the suggestion and code of Barzilay Eliyahu <eli@cs.bgu.ac.il>.
+;;         the suggestion and code of Eli Barzilay <eli@barzilay.org>.
 ;;
 ;; v1.3.1  Some spelling corrected (from Vinicius Jose Latorre
 ;;         <vinicius@cpqd.br> and Steven L Baur <steve@xemacs.org>).
@@ -311,7 +327,7 @@
 
 ;;; Code:
 
-(defvar mic-paren-version "3.10"
+(defvar mic-paren-version "3.13"
   "Version of mic-paren.")
 
 (eval-when-compile (require 'cl))
@@ -987,138 +1003,170 @@ This is the main function of mic-paren."
   (let ((loc mic-paren-previous-location)
         charquote two opos matched-paren mismatch face visible)
 
-    (flet ((highlight-p
-            (pos prio which)
-            (let ((fcq (mic-paren-is-following-char-quoted pos))
-                  (right-prio (eq prio paren-priority))
-                  (get-c-0 (if which 'preceding-char 'following-char))
-                  (get-c-1 (if which 'following-char 'preceding-char)))
-              (or (and (eq (char-syntax (funcall get-c-0))
-                           (if which ?\) ?\())
-                       (not (and (eq (char-syntax (funcall get-c-1))
-                                     (if which ?\( ?\)))
-                                 right-prio))
-                       (or paren-match-quoted-paren
-                           (not fcq)))
-                  (and paren-match-paired-delimiter
-                       (eq (char-syntax (funcall get-c-0)) ?\$)
-                       (not (and (eq (char-syntax (funcall get-c-1)) ?\$)
-                                 right-prio))
-                       (not fcq)))))
+    (cl-flet*
+        ((highlight-p
+          (pos prio which)
+          (let ((fcq (mic-paren-is-following-char-quoted pos))
+                (right-prio (eq prio paren-priority))
+                (get-c-0 (if which 'preceding-char 'following-char))
+                (get-c-1 (if which 'following-char 'preceding-char)))
+            (or (and (eq (char-syntax (funcall get-c-0))
+                         (if which ?\) ?\())
+                     (not (and (eq (char-syntax (funcall get-c-1))
+                                   (if which ?\( ?\)))
+                               right-prio))
+                     (or paren-match-quoted-paren
+                         (not fcq)))
+                (and paren-match-paired-delimiter
+                     (eq (char-syntax (funcall get-c-0)) ?\$)
+                     (not (and (eq (char-syntax (funcall get-c-1)) ?\$)
+                               right-prio))
+                     (not fcq)))))
 
-           (find-other-paren
-            (forwardp)
-            (let ((mult (if forwardp 1 -1)))
-              ;; Find the position of the other paren.
-              (save-excursion
-                (save-restriction
-                  (when blink-matching-paren-distance
-                    (let ((lim (+ (point) (* blink-matching-paren-distance
-                                             mult))))
-                      (narrow-to-region (if forwardp
-                                            (point-min)
-                                          (max lim (point-min)))
-                                        (if forwardp
-                                            (min lim (point-max))
-                                          (point-max)))))
-                  (condition-case ()
-                      (setq opos (scan-sexps (point) mult))
-                    (error nil))))
-              ;; We must call matching-paren because `scan-sexps' doesn't
-              ;; care about the kind of paren (e.g., matches '( and '}).
-              ;; However, `matching-paren' only returns the character
-              ;; displaying the matching paren in buffer's syntax-table
-              ;; (regardless of the buffer's current contents!).  Below we
-              ;; compare the results of `scan-sexps' and `matching-paren'
-              ;; and if different we display a mismatch.
-              (let ((c (funcall (if forwardp
-                                    'following-char
-                                  'preceding-char))))
-                (setq matched-paren (matching-paren c))
-                ;; matching-paren can only handle chars with syntax ) or (.
-                (when (eq (char-syntax c) ?\$)
-                  (setq matched-paren c)))
-              ;; If we have changed the syntax of the escape or quote-char
-              ;; we must undo this and we can do this first now.
-              (mic-paren-recharquote charquote)
-              opos))
+         (comment-style
+          ()
+          (or (get major-mode 'mic-paren-comment-style)
+              (put major-mode 'mic-paren-comment-style
+                   ;; Tested (lightly) w/ SML, Modula-2, Pascal.
+                   (cl-flet
+                       ((sub (str pos) (condition-case ()
+                                           (aref str (if (> 0 pos)
+                                                         (+ (length str)
+                                                            pos)
+                                                       pos))
+                                         (error 0))))
+                     (if (string= "()" (string (sub comment-start 0)
+                                               (sub comment-end -1)))
+                         'sexp
+                       'normal)))))
 
-           (nov
-            (place b e face)
-            (let ((ov (mic-make-overlay b e)))
-              (mic-overlay-put ov 'face face)
-              (mic-overlay-put ov 'priority paren-overlay-priority)
-              (aset mic-paren-overlays
-                    (cdr (assq place '((backw . 0)
-                                       (point . 1)
-                                       (forew . 2))))
-                    ov)))
+         (sexp-ish-comment-edge
+          (p mult)
+          (and (eq 'sexp (comment-style))
+               (if (> 0 mult)
+                   (prog1 (nth 8 (syntax-ppss (1- p)))
+                     (forward-char 1))
+                 ;; hmmm
+                 (save-match-data
+                   (looking-at (regexp-quote comment-start))))))
 
-           (new-location-p
-            ()
-            (not (and (eq (point)           (aref loc 0))
-                      (eq (current-buffer)  (aref loc 1))
-                      (eq (selected-window) (aref loc 2)))))
+         (find-other-paren
+          (forwardp)
+          (let ((mult (if forwardp 1 -1)))
+            ;; Find the position of the other paren.
+            (save-excursion
+              (save-restriction
+                (when blink-matching-paren-distance
+                  (let ((lim (+ (point) (* blink-matching-paren-distance
+                                           mult))))
+                    (narrow-to-region (if forwardp
+                                          (point-min)
+                                        (max lim (point-min)))
+                                      (if forwardp
+                                          (min lim (point-max))
+                                        (point-max)))))
+                (condition-case ()
+                    (setq opos (let ((p (point)))
+                                 (if (not (sexp-ish-comment-edge p mult))
+                                     (scan-sexps p mult)
+                                   (forward-comment mult)
+                                   (point))))
+                  (error nil))))
+            ;; We must call matching-paren because `scan-sexps' doesn't
+            ;; care about the kind of paren (e.g., matches '( and '}).
+            ;; However, `matching-paren' only returns the character
+            ;; displaying the matching paren in buffer's syntax-table
+            ;; (regardless of the buffer's current contents!).  Below we
+            ;; compare the results of `scan-sexps' and `matching-paren'
+            ;; and if different we display a mismatch.
+            (let ((c (funcall (if forwardp
+                                  'following-char
+                                'preceding-char))))
+              (setq matched-paren (matching-paren c))
+              ;; matching-paren can only handle chars with syntax ) or (.
+              (when (eq (char-syntax c) ?\$)
+                (setq matched-paren c)))
+            ;; If we have changed the syntax of the escape or quote-char
+            ;; we must undo this and we can do this first now.
+            (mic-paren-recharquote charquote)
+            opos))
 
-           (ding-maybe
-            (ok)
-            (and ok paren-ding-unmatched
-                 (new-location-p)
-                 (ding)))
+         (nov
+          (place b e face)
+          (let ((ov (mic-make-overlay b e)))
+            (mic-overlay-put ov 'face face)
+            (mic-overlay-put ov 'priority paren-overlay-priority)
+            (aset mic-paren-overlays
+                  (cdr (assq place '((backw . 0)
+                                     (point . 1)
+                                     (forew . 2))))
+                  ov)))
 
-           (sorry
-            (place b e)
-            ;; Highlight unmatched paren.
-            (nov place b e paren-no-match-face)
-            ;; Print no-match message.
-            (and paren-message-no-match
-                 (not (window-minibuffer-p (selected-window)))
-                 (not isearch-mode)
-                 (new-location-p)
-                 (mic-paren-nolog-message "No %sing parenthesis found"
-                                          (if (eq 'backw place)
-                                              "open"
-                                            "clos")))
-            (ding-maybe paren-message-no-match))
+         (new-location-p
+          ()
+          (not (and (eq (point)           (aref loc 0))
+                    (eq (current-buffer)  (aref loc 1))
+                    (eq (selected-window) (aref loc 2)))))
 
-           (set-mismatch/face/visible
-            (c-at ofs)
-            (setq mismatch (or (not matched-paren)
-                               (/= matched-paren (funcall c-at opos))
-                               (mic-paren-fcq-mismatch (+ opos ofs) charquote))
-                  face (if mismatch
-                           paren-mismatch-face
-                         paren-match-face)
-                  visible (when (pos-visible-in-window-p opos)
-                            (save-excursion
-                              (goto-char opos)
-                              (let ((hrel (- (current-column)
-                                             (window-hscroll))))
-                                (and (<             -1 hrel)
-                                     (> (window-width) hrel)))))))
+         (ding-maybe
+          (ok)
+          (and ok paren-ding-unmatched
+               (new-location-p)
+               (ding)))
 
-           (sexp-mode-p
-            ()
-            (case paren-sexp-mode
-              (match (not mismatch))
-              (mismatch mismatch)
-              ((nil t) paren-sexp-mode)))
+         (sorry
+          (place b e)
+          ;; Highlight unmatched paren.
+          (nov place b e paren-no-match-face)
+          ;; Print no-match message.
+          (and paren-message-no-match
+               (not (window-minibuffer-p (selected-window)))
+               (not isearch-mode)
+               (new-location-p)
+               (mic-paren-nolog-message "No %sing parenthesis found"
+                                        (if (eq 'backw place)
+                                            "open"
+                                          "clos")))
+          (ding-maybe paren-message-no-match))
 
-           (finish
-            (get-message)
-            ;; Print messages if match is offscreen.
-            (and (not (eq paren-display-message 'never))
-                 (or (not visible) (eq paren-display-message 'always))
-                 (not (window-minibuffer-p (selected-window)))
-                 (not isearch-mode)
-                 (new-location-p)
-                 (let ((message-truncate-lines paren-message-truncate-lines))
-                   (mic-paren-nolog-message
-                    "%s %s"
-                    (if mismatch "MISMATCH:" "Matches")
-                    (funcall get-message opos))))
-            ;; Ding if mismatch.
-            (ding-maybe mismatch)))
+         (set-mismatch/face/visible
+          (c-at ofs)
+          (setq mismatch (or (not matched-paren)
+                             (/= matched-paren (funcall c-at opos))
+                             (mic-paren-fcq-mismatch (+ opos ofs) charquote))
+                face (if mismatch
+                         paren-mismatch-face
+                       paren-match-face)
+                visible (when (pos-visible-in-window-p opos)
+                          (save-excursion
+                            (goto-char opos)
+                            (let ((hrel (- (current-column)
+                                           (window-hscroll))))
+                              (and (<             -1 hrel)
+                                   (> (window-width) hrel)))))))
+
+         (sexp-mode-p
+          ()
+          (case paren-sexp-mode
+            (match (not mismatch))
+            (mismatch mismatch)
+            ((nil t) paren-sexp-mode)))
+
+         (finish
+          (get-message)
+          ;; Print messages if match is offscreen.
+          (and (not (eq paren-display-message 'never))
+               (or (not visible) (eq paren-display-message 'always))
+               (not (window-minibuffer-p (selected-window)))
+               (not isearch-mode)
+               (new-location-p)
+               (let ((message-truncate-lines paren-message-truncate-lines))
+                 (mic-paren-nolog-message
+                  "%s %s"
+                  (if mismatch "MISMATCH:" "Matches")
+                  (funcall get-message opos))))
+          ;; Ding if mismatch.
+          (ding-maybe mismatch)))
 
       ;; Handle backward highlighting.
       (when (highlight-p (- (point) 2) 'open t)
