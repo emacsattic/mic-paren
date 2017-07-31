@@ -1314,7 +1314,6 @@ should be a list of the form (CHAR SYNTAX-STRING)."
       (error nil)))
 
 (provide 'mic-paren)
-(provide 'paren)
 
 ;;; Local variables:
 ;;; coding: utf-8
